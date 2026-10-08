@@ -15,6 +15,12 @@ from api.relayer import (
     sync_distributor_streak_native,
     ProofPayloadRequest
 )
+from api.security import (
+    SecurityHeadersMiddleware,
+    RateLimiter,
+    NonceReplayProtector,
+    validate_stellar_address
+)
 
 # Initialize FastAPI application with disabled trailing slash redirection
 app = FastAPI(
@@ -24,7 +30,8 @@ app = FastAPI(
     redirect_slashes=False
 )
 
-# Add CORS middleware to support frontend integration
+# Production security headers and CORS middleware
+app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -32,6 +39,26 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+rate_limiter = RateLimiter(max_requests=120, window_seconds=60)
+nonce_protector = NonceReplayProtector(max_skew_seconds=900)
+
+@app.middleware("http")
+async def rate_limiting_middleware(request, call_next):
+    # Allow health checks without rate limiting
+    if request.url.path in ["/health", "/healthz", "/"]:
+        return await call_next(request)
+
+    client_ip = request.client.host if request.client else "unknown"
+    allowed, retry_after = rate_limiter.is_allowed(client_ip)
+    if not allowed:
+        from starlette.responses import JSONResponse
+        return JSONResponse(
+            status_code=429,
+            content={"detail": "Too Many Requests", "retry_after_seconds": retry_after},
+            headers={"Retry-After": str(retry_after)}
+        )
+    return await call_next(request)
 
 # Initialize Stellar Keypair for the Cryptographic Oracle
 oracle_secret = os.environ.get("ORACLE_SECRET")
@@ -120,6 +147,24 @@ def read_root():
     }
 
 
+@app.get("/health")
+@app.get("/healthz")
+@app.get("/api/health")
+@app.get("/api/healthz")
+def healthz():
+    """
+    Production health probe verifying oracle, relayer, and ML engine readiness.
+    """
+    return {
+        "status": "healthy",
+        "oracle_public_key": oracle_keypair.public_key,
+        "relayer_public_key": relayer_keypair.public_key,
+        "model_loaded": model is not None,
+        "timestamp": int(time.time()),
+        "uptime": "active"
+    }
+
+
 @app.post("/generate_signature")
 @app.post("/generate_signature/")
 @app.post("/api/generate_signature")
@@ -131,6 +176,11 @@ async def generate_signature(data: UserData):
     Predicts sleep quality score using scikit-learn model, constructs a verified
     payload, and cryptographically signs it with the Oracle's Stellar private key.
     """
+    if data.user_address and not validate_stellar_address(data.user_address):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid Stellar public key format: '{data.user_address}'. Must be a 56-character string starting with 'G'."
+        )
     try:
         # 1. Format ML features into a dictionary (excluding user_address)
         ml_features = {
@@ -276,8 +326,11 @@ async def submit_proof(data: ProofPayloadRequest):
         else:
             interpretation = "Low Sleep Quality / Higher Fatigue Risk"
 
-        if data.user_address:
-            record_participant(data.user_address)
+        if data.user_address and not validate_stellar_address(data.user_address):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid Stellar public key format: '{data.user_address}'. Must be a 56-character string starting with 'G'."
+            )
 
         ts = data.timestamp or int(time.time())
         payload = {
@@ -290,6 +343,14 @@ async def submit_proof(data: ProofPayloadRequest):
         payload_hex = payload_str.encode('utf-8').hex()
         signature_bytes = oracle_keypair.sign(payload_str.encode('utf-8'))
         signature_hex = signature_bytes.hex()
+
+        # Enforce replay protection on oracle signature
+        allowed, reason = nonce_protector.validate_and_record(signature_hex, ts)
+        if not allowed:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Replay protection rejected: {reason}"
+            )
 
         # 3. If signed_tx_xdr is provided or passed after signature generation
         tx_hash = None
