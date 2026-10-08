@@ -1,0 +1,38 @@
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: neurosync-backend
+    ports:
+      - "8000:8000"
+    environment:
+      - PORT=8000
+      - ORACLE_SECRET=${ORACLE_SECRET:-}
+      - RELAYER_SECRET=${RELAYER_SECRET:-}
+      - SOROBAN_RPC_URL=${SOROBAN_RPC_URL:-https://soroban-testnet.stellar.org:443}
+      - DISTRIBUTOR_CONTRACT_ID=${DISTRIBUTOR_CONTRACT_ID:-CC42VJLNLOCRSJHX3VXSVR3KOZG2YGFNT6TUEF2DV6TXYS6FGYMESQ3V}
+      - TOKEN_CONTRACT_ID=${TOKEN_CONTRACT_ID:-CCBJ36QQMCTII5O3NLCUMEU2O3T2WZAM6ZYUNT4WOHGGMOS2R7JSAHDT}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/healthz')"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: neurosync-frontend
+    ports:
+      - "3000:3000"
+    environment:
+      - NEXT_PUBLIC_API_URL=http://localhost:8000
+      - NEXT_PUBLIC_DISTRIBUTOR_CONTRACT_ID=${DISTRIBUTOR_CONTRACT_ID:-CC42VJLNLOCRSJHX3VXSVR3KOZG2YGFNT6TUEF2DV6TXYS6FGYMESQ3V}
+      - NEXT_PUBLIC_TOKEN_CONTRACT_ID=${TOKEN_CONTRACT_ID:-CCBJ36QQMCTII5O3NLCUMEU2O3T2WZAM6ZYUNT4WOHGGMOS2R7JSAHDT}
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
