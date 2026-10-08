@@ -92,3 +92,6 @@ impl NSyncToken {
     }
 }
 
+#[cfg(test)]
+mod test;
+

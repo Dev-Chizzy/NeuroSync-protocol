@@ -27,6 +27,8 @@ frontend/.env.local
 # Logs & Temporary
 *.log
 uvicorn.log
+test_snapshots/
+.pytest_cache/
 
 # System / Editor
 .DS_Store
