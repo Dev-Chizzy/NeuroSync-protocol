@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "neurosync-sdk"
+version = "0.1.0"
+description = "Official Python Client SDK and CLI for NeuroSync Protocol DeSci Oracle and Gas Master Relayer"
+authors = [{ name = "NeuroSync Core Protocol Team" }]
+license = { text = "Apache-2.0" }
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+    "requests>=2.28.0",
+    "pydantic>=2.0.0",
+    "stellar-sdk>=9.0.0"
+]
+
+[project.scripts]
+neurosync = "neurosync.cli:main"
